@@ -41,6 +41,7 @@ if os.path.exists(sys_lib_dir):
 def compile_module_from_src(src, name):
     key = hashlib.md5(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
+    print(f"name.so: {name}.so")
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:

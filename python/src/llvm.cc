@@ -27,6 +27,8 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
@@ -35,6 +37,7 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
@@ -167,8 +170,30 @@ createTargetMachine(llvm::Module *module, std::string proc,
   opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
+
+  std::vector<std::string> Options = {
+    "--prefer-predicate-over-epilogue=predicate-else-scalar-epilogue",
+    "-riscv-v-vector-bits-min=128",
+    "--riscv-v-fixed-length-vector-lmul-max=8",
+    "--riscv-v-register-bit-width-lmul=8",
+    "-force-tail-folding-style=data-with-evl"
+  };
+  std::vector<std::string> OptionNames = {
+    "prefer-predicate-over-epilogue",
+    "riscv-v-vector-bits-min",
+    "riscv-v-fixed-length-vector-lmul-max",
+    "riscv-v-register-bit-width-lmul",
+    "force-tail-folding-style"
+  };
+  std::vector<const char *> CodegenArgv;
+  for (std::string &Arg : Options)
+    CodegenArgv.push_back(Arg.c_str());
+  llvm::cl::ParseCommandLineOptions(CodegenArgv.size(), CodegenArgv.data());
+  outs()<<"echo createTargetMachine\n";
+  StringRef Proc("generic-rv64");
+  const std::string Features = "+m,+f,+d,+v";
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-      module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
+      module->getTargetTriple(), Proc, Features, opt, llvm::Reloc::PIC_,
       std::nullopt,
       disableLLVMOpt ? llvm::CodeGenOptLevel::None
                      : llvm::CodeGenOptLevel::Aggressive)};
@@ -406,11 +431,15 @@ std::string translateLLVMIRToASM(
     llvm::dbgs() << reportStream.str();
     timePassesStr.clear();
   }
+  outs()<<"echo translateLLVMIRToASM\n";
 
   // create machine
   module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features,
+  std::string Proc = "generic-rv64";
+  const std::string Features = "+m,+f,+d,+v";
+  auto machine = createTargetMachine(&module, Proc, enable_fp_fusion, Features,
                                      enable_fast_math);
+  outs()<<machine->getTargetTriple().str()<<" and "<<machine->getTargetCPU()<<"\n";
   // set data layout
   module.setDataLayout(machine->createDataLayout());
   // emit machine code
@@ -422,7 +451,13 @@ std::string translateLLVMIRToASM(
     // emit
     auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
                              : llvm::CodeGenFileType::AssemblyFile;
-    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
+    bool retAdd = machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
+    if (retAdd) {
+        outs() << "Emission of this file type is not supported!\n";
+        return "";
+    }
+    llvm::DebugFlag = true;
+    llvm::setCurrentDebugType("codegen");
     pass.run(module);
 
     if (enabledTiming) {
@@ -641,6 +676,34 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
+
+        std::vector<std::string> Options = {
+          "-prefer-predicate-over-epilogue=predicate-else-scalar-epilogue",
+          "-riscv-v-vector-bits-min=128",
+          "--riscv-v-fixed-length-vector-lmul-max=8",
+          "--riscv-v-register-bit-width-lmul=8",
+          "-force-tail-folding-style=data-with-evl"
+        };
+        std::vector<std::string> OptionNames = {
+          "prefer-predicate-over-epilogue",
+          "riscv-v-vector-bits-min",
+          "riscv-v-fixed-length-vector-lmul-max",
+          "riscv-v-register-bit-width-lmul",
+          "force-tail-folding-style"
+        };
+        std::vector<const char *> CodegenArgv;
+        for (std::string &Arg : Options)
+          CodegenArgv.push_back(Arg.c_str());
+        llvm::cl::ParseCommandLineOptions(CodegenArgv.size(), CodegenArgv.data());
+        auto options = llvm::cl::getRegisteredOptions();
+        for (auto &[name, option] : options) {
+          if (std::find(OptionNames.begin(), OptionNames.end(), name) != OptionNames.end()) {
+            outs() << "Option: "<<name;
+            if (auto *intOpt = static_cast<llvm::cl::opt<int> *>(option)) {
+              outs() << " (int) = " << *intOpt << "\n";
+            }
+          }
+        }
         std::unique_ptr<llvm::Module> llvmMod =
             mlir::translateModuleToLLVMIR(mod, ctx);
         if (!llvmMod) {
@@ -685,6 +748,26 @@ void init_triton_llvm(py::module &&m) {
             setLLVMOption<bool>(flag.str(), true);
           }
         }
+
+        std::vector<std::string> Options = {
+          "-prefer-predicate-over-epilogue=predicate-else-scalar-epilogue",
+          "-riscv-v-vector-bits-min=128",
+          "--riscv-v-fixed-length-vector-lmul-max=8",
+          "--riscv-v-register-bit-width-lmul=8",
+          "-force-tail-folding-style=data-with-evl"
+        };
+        std::vector<std::string> OptionNames = {
+          "prefer-predicate-over-epilogue",
+          "riscv-v-vector-bits-min",
+          "riscv-v-fixed-length-vector-lmul-max",
+          "riscv-v-register-bit-width-lmul",
+          "force-tail-folding-style"
+        };
+        std::vector<const char *> CodegenArgv;
+        for (std::string &Arg : Options)
+          CodegenArgv.push_back(Arg.c_str());
+        llvm::cl::ParseCommandLineOptions(CodegenArgv.size(), CodegenArgv.data());
+        outs()<<"echo optimize_module\n";
         using namespace llvm;
         LoopAnalysisManager lam;
         FunctionAnalysisManager fam;
@@ -735,9 +818,11 @@ void init_triton_llvm(py::module &&m) {
         // in the target machine between the MLIR and Clang generated kernels
         // and break the lowering of some target specific intrinsics.
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
+        std::string Arch = "generic-rv64";
+        const std::string Features = "+m,+f,+d,+v";
         if (!arch.empty() && pluginFile.empty())
           targetMachine =
-              createTargetMachine(mod, arch, enable_fp_fusion, features);
+              createTargetMachine(mod, Arch, enable_fp_fusion, Features);
         PassBuilder pb(/*targetMachine=*/targetMachine.get(), tuningOptions,
                        std::nullopt, instrCbPtr);
 
@@ -796,8 +881,29 @@ void init_triton_llvm(py::module &&m) {
     if (!target) {
       throw std::runtime_error("target lookup error: " + error);
     }
+
+    std::vector<std::string> Options = {
+      "--prefer-predicate-over-epilogue=predicate-else-scalar-epilogue",
+      "-riscv-v-vector-bits-min=128",
+      "--riscv-v-fixed-length-vector-lmul-max=8",
+      "--riscv-v-register-bit-width-lmul=8",
+      "-force-tail-folding-style=data-with-evl"
+    };
+    std::vector<std::string> OptionNames = {
+      "prefer-predicate-over-epilogue",
+      "riscv-v-vector-bits-min",
+      "riscv-v-fixed-length-vector-lmul-max",
+      "riscv-v-register-bit-width-lmul",
+      "force-tail-folding-style"
+    };
+    std::vector<const char *> CodegenArgv;
+    for (std::string &Arg : Options)
+      CodegenArgv.push_back(Arg.c_str());
+    llvm::cl::ParseCommandLineOptions(CodegenArgv.size(), CodegenArgv.data());
+    StringRef cpu("generic-rv64");
+    const std::string Features = "+m,+f,+d,+v";
     std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-        mod->getTargetTriple(), llvm::sys::getHostCPUName(), "", {},
+        mod->getTargetTriple(), cpu, Features, {},
         llvm::Reloc::PIC_)};
     mod->setDataLayout(machine->createDataLayout());
   });
@@ -823,8 +929,10 @@ void init_triton_llvm(py::module &&m) {
                 "lineno: " + std::to_string(error.getLineNo()));
           }
           auto triple = getDefaultTargerOrProcessTriple();
+          const std::string cpu = "generic-rv64";
+          const std::string Features = "+m,+f,+d,+v";
           res = translateLLVMIRToASM(*module, triple,
-                                     llvm::sys::getHostCPUName().str(), "", {},
+                                     cpu, Features, {},
                                      enable_fp_fusion, false, enable_fast_math);
         }
         return py::str(res);
@@ -1011,19 +1119,23 @@ void init_triton_llvm(py::module &&m) {
 
   m.def("get_cpu_tripple", []() { return llvm::sys::getProcessTriple(); });
 
-  m.def("get_cpu_name", []() { return llvm::sys::getHostCPUName().str(); });
+  m.def("get_cpu_name", []() { return "generic-rv64"; });
 
   m.def("get_cpu_features", []() {
     auto features = llvm::sys::getHostCPUFeatures();
 
     std::set<std::string> res;
-    for (auto &f : features) {
-      if (f.second)
-        res.insert(f.first().str());
-    }
+    //for (auto &f : features) {
+    //  if (f.second)
+    //    res.insert(f.first().str());
+    //}
+    res.insert("+m");
+    res.insert("+f");
+    res.insert("+d");
+    res.insert("+v");
 
     // Likely something went wrong with the LLVM feature detection.
-    if (!res.size()) {
+    /*if (!res.size()) {
       std::string triple = llvm::sys::getProcessTriple();
       // e.g. arm64-apple-darwin24.1.0
       //      ^^^^^
@@ -1037,7 +1149,7 @@ void init_triton_llvm(py::module &&m) {
         // Safe because NEON is a mandatory feature for aarch64.
         res.insert("neon"); // For math tests
       }
-    }
+    }*/
 
     return res;
   });

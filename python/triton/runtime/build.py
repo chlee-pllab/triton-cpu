@@ -48,7 +48,9 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     system = platform.system()
     machine = platform.machine()
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
-    cc = os.environ.get("CC")
+    #cc = os.environ.get("CC")
+    cc = os.path.expanduser("~/llvm-project_v/install/bin/clang")
+    print("cc: ", cc)
     if cc is None:
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
@@ -65,9 +67,12 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     custom_backend_dirs = knobs.build.backend_dirs
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
-    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
+    #cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
+    sysroot = os.path.expanduser("~/toolchain/sysroot")
+    toolchain = os.path.expanduser("~/toolchain")
+    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-fuse-ld=lld", "-o", so]
 
-    libraries += ["gcc"]
+    #libraries += ["gcc"]
     # Use dynamic lookup to load Python library on Mac
     if system == "Darwin":
         cc_cmd += ["-undefined", "dynamic_lookup"]
@@ -95,7 +100,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
                 else:
                     print("Warning: TRITON_LOCAL_LIBOMP_PATH is not set for Apple clang. OpenMP is disabled.")
             else:
-                cc_cmd += ["-fopenmp"]
+                #cc_cmd += ["-fopenmp"]
                 if libomp_path:
                     print("Info: Ignoring TRITON_LOCAL_LIBOMP_PATH for non-Apple clang compiler")
     if src.endswith(".s"):

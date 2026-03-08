@@ -51,6 +51,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY",
     "TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY",
     // clang-format on
+    "TRITON_RISCV_TRIPLE",
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {

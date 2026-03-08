@@ -375,8 +375,21 @@ if(TRITON_BUILD_PYTHON_MODULE)
       )
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
       list(APPEND TRITON_LIBRARIES
-          LLVMX86CodeGen
-          LLVMX86AsmParser
+          LLVMRISCVCodeGen
+          LLVMRISCVAsmParser
+          LLVMRISCVDisassembler
+          LLVMRISCVDesc
+          LLVMRISCVTargetMCA
+          LLVMRISCVInfo
+      )
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64")
+      list(APPEND TRITON_LIBRARIES
+          LLVMRISCVCodeGen
+          LLVMRISCVAsmParser
+          LLVMRISCVDisassembler
+          LLVMRISCVDesc
+          LLVMRISCVTargetMCA
+          LLVMRISCVInfo
       )
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le")
       list(APPEND TRITON_LIBRARIES

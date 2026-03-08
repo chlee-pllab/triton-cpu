@@ -24,10 +24,10 @@ import triton
 import triton.language as tl
 
 GPU_BLOCK_SIZE = 1024
-CPU_BLOCK_SIZE = 4096
+CPU_BLOCK_SIZE = 128
 # Single Thread Threshold
 CPU_ST_THRESHOLD = 65536
-USE_GPU = True
+USE_GPU = False
 
 
 @triton.jit
@@ -130,8 +130,11 @@ def add(x: torch.Tensor, y: torch.Tensor, output: torch.Tensor, device):
     #  - Each torch.tensor object is implicitly converted into a pointer to its first element.
     #  - `triton.jit`'ed functions can be indexed with a launch grid to obtain a callable GPU kernel.
     #  - Don't forget to pass meta-parameters as keywords arguments.
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=CPU_BLOCK_SIZE if x.device.type == 'cpu' else GPU_BLOCK_SIZE,
+    try:
+        add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=CPU_BLOCK_SIZE if x.device.type == 'cpu' else GPU_BLOCK_SIZE,
                      num_warps=1)
+    except:
+        pass
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output
@@ -175,6 +178,7 @@ size = 98432
 triton.runtime.driver.set_active_to_cpu()
 x = torch.rand(size, device=torch.device('cpu'))
 y = torch.rand(size, device=torch.device('cpu'))
+'''
 output_torch_cpu = torch.add(x, y)
 output_triton_cpu = add(x, y, None, torch.device('cpu'))
 print(output_torch_cpu)
@@ -194,6 +198,10 @@ LINE_NAMES = [
     'TritonCPUTiled (autotuned, hooks)', 'TorchCPU'
 ]
 LINE_STYLES = [('blue', '--'), ('blue', '-.'), ('red', '-'), ('red', '--'), ('red', '-.'), ('red', ':'), ('green', '-')]
+'''
+LINE_VALS = ['triton-cpu']
+LINE_NAMES = ['TritonCPU']
+LINE_STYLES = [('red', '-')]
 
 if USE_GPU and triton.runtime.driver.get_active_gpus():
     triton.runtime.driver.set_active_to_gpu()
