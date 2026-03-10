@@ -9,62 +9,65 @@ define void @add_kernel(ptr readonly captures(none) %0, ptr readonly captures(no
   %12 = sext i32 %11 to i64, !dbg !10
   %13 = getelementptr float, ptr %0, i64 %12, !dbg !10
   %14 = alloca <128 x float>, align 16, !dbg !11
-  br label %15, !dbg !11
+  %15 = sext i32 %3 to i64
+  %16 = sub nsw i64 %15, %12
+  %17 = tail call i64 @llvm.smin.i64(i64 %16, i64 128)
+  br label %18, !dbg !11
 
-15:                                               ; preds = %15, %10
-  %16 = phi i64 [ %23, %15 ], [ 0, %10 ], !dbg !11
-  %17 = sub i64 128, %16, !dbg !11
-  %18 = tail call i64 @llvm.riscv.vsetvli.i64(i64 %17, i64 2, i64 3), !dbg !11
-  %19 = trunc nuw i64 %18 to i32, !dbg !11
-  %20 = getelementptr float, ptr %13, i64 %16, !dbg !11
-  %21 = tail call <vscale x 16 x float> @llvm.vp.load.nxv16f32.p0(ptr %20, <vscale x 16 x i1> splat (i1 true), i32 %19), !dbg !11
-  %22 = getelementptr float, ptr %14, i64 %16, !dbg !11
-  call void @llvm.vp.store.nxv16f32.p0(<vscale x 16 x float> %21, ptr %22, <vscale x 16 x i1> splat (i1 true), i32 %19), !dbg !11
-  %23 = add i64 %18, %16, !dbg !11
-  %24 = icmp eq i64 %23, 128, !dbg !11
-  br i1 %24, label %25, label %15, !dbg !11
+18:                                               ; preds = %18, %10
+  %19 = phi i64 [ %26, %18 ], [ 0, %10 ], !dbg !11
+  %20 = sub i64 %17, %19, !dbg !11
+  %21 = tail call i64 @llvm.riscv.vsetvli.i64(i64 %20, i64 2, i64 3), !dbg !11
+  %22 = trunc nuw i64 %21 to i32, !dbg !11
+  %23 = getelementptr float, ptr %13, i64 %19, !dbg !11
+  %24 = tail call <vscale x 16 x float> @llvm.vp.load.nxv16f32.p0(ptr %23, <vscale x 16 x i1> splat (i1 true), i32 %22), !dbg !11
+  %25 = getelementptr float, ptr %14, i64 %19, !dbg !11
+  call void @llvm.vp.store.nxv16f32.p0(<vscale x 16 x float> %24, ptr %25, <vscale x 16 x i1> splat (i1 true), i32 %22), !dbg !11
+  %26 = add i64 %21, %19, !dbg !11
+  %.not = icmp ult i64 %26, %17, !dbg !11
+  br i1 %.not, label %18, label %27, !dbg !11
 
-25:                                               ; preds = %15
-  %26 = load <128 x float>, ptr %14, align 16, !dbg !11
-  %27 = getelementptr float, ptr %1, i64 %12, !dbg !12
-  %28 = alloca <128 x float>, align 16, !dbg !13
-  br label %29, !dbg !13
+27:                                               ; preds = %18
+  %28 = load <128 x float>, ptr %14, align 16, !dbg !11
+  %29 = getelementptr float, ptr %1, i64 %12, !dbg !12
+  %30 = alloca <128 x float>, align 16, !dbg !13
+  br label %31, !dbg !13
 
-29:                                               ; preds = %29, %25
-  %30 = phi i64 [ %37, %29 ], [ 0, %25 ], !dbg !13
-  %31 = sub i64 128, %30, !dbg !13
-  %32 = tail call i64 @llvm.riscv.vsetvli.i64(i64 %31, i64 2, i64 3), !dbg !13
-  %33 = trunc nuw i64 %32 to i32, !dbg !13
-  %34 = getelementptr float, ptr %27, i64 %30, !dbg !13
-  %35 = tail call <vscale x 16 x float> @llvm.vp.load.nxv16f32.p0(ptr %34, <vscale x 16 x i1> splat (i1 true), i32 %33), !dbg !13
-  %36 = getelementptr float, ptr %28, i64 %30, !dbg !13
-  call void @llvm.vp.store.nxv16f32.p0(<vscale x 16 x float> %35, ptr %36, <vscale x 16 x i1> splat (i1 true), i32 %33), !dbg !13
-  %37 = add i64 %32, %30, !dbg !13
-  %38 = icmp eq i64 %37, 128, !dbg !13
-  br i1 %38, label %39, label %29, !dbg !13
+31:                                               ; preds = %31, %27
+  %32 = phi i64 [ %39, %31 ], [ 0, %27 ], !dbg !13
+  %33 = sub i64 %17, %32, !dbg !13
+  %34 = tail call i64 @llvm.riscv.vsetvli.i64(i64 %33, i64 2, i64 3), !dbg !13
+  %35 = trunc nuw i64 %34 to i32, !dbg !13
+  %36 = getelementptr float, ptr %29, i64 %32, !dbg !13
+  %37 = tail call <vscale x 16 x float> @llvm.vp.load.nxv16f32.p0(ptr %36, <vscale x 16 x i1> splat (i1 true), i32 %35), !dbg !13
+  %38 = getelementptr float, ptr %30, i64 %32, !dbg !13
+  call void @llvm.vp.store.nxv16f32.p0(<vscale x 16 x float> %37, ptr %38, <vscale x 16 x i1> splat (i1 true), i32 %35), !dbg !13
+  %39 = add i64 %34, %32, !dbg !13
+  %.not1 = icmp ult i64 %39, %17, !dbg !13
+  br i1 %.not1, label %31, label %40, !dbg !13
 
-39:                                               ; preds = %29
-  %40 = load <128 x float>, ptr %28, align 16, !dbg !13
-  %41 = fadd <128 x float> %26, %40, !dbg !14
-  %42 = getelementptr float, ptr %2, i64 %12, !dbg !15
-  %43 = alloca <128 x float>, align 16, !dbg !16
-  store <128 x float> %41, ptr %43, align 512, !dbg !16
-  br label %44, !dbg !16
+40:                                               ; preds = %31
+  %41 = load <128 x float>, ptr %30, align 16, !dbg !13
+  %42 = fadd <128 x float> %28, %41, !dbg !14
+  %43 = getelementptr float, ptr %2, i64 %12, !dbg !15
+  %44 = alloca <128 x float>, align 16, !dbg !16
+  store <128 x float> %42, ptr %44, align 16, !dbg !16
+  br label %45, !dbg !16
 
-44:                                               ; preds = %44, %39
-  %45 = phi i64 [ %52, %44 ], [ 0, %39 ], !dbg !16
-  %46 = sub i64 128, %45, !dbg !16
-  %47 = tail call i64 @llvm.riscv.vsetvli.i64(i64 %46, i64 2, i64 3), !dbg !16
-  %48 = trunc nuw i64 %47 to i32, !dbg !16
-  %49 = getelementptr float, ptr %43, i64 %45, !dbg !16
-  %50 = call <vscale x 16 x float> @llvm.vp.load.nxv16f32.p0(ptr %49, <vscale x 16 x i1> splat (i1 true), i32 %48), !dbg !16
-  %51 = getelementptr float, ptr %42, i64 %45, !dbg !16
-  tail call void @llvm.vp.store.nxv16f32.p0(<vscale x 16 x float> %50, ptr %51, <vscale x 16 x i1> splat (i1 true), i32 %48), !dbg !16
-  %52 = add i64 %47, %45, !dbg !16
-  %53 = icmp eq i64 %52, 128, !dbg !16
-  br i1 %53, label %54, label %44, !dbg !16
+45:                                               ; preds = %45, %40
+  %46 = phi i64 [ %53, %45 ], [ 0, %40 ], !dbg !16
+  %47 = sub i64 %17, %46, !dbg !16
+  %48 = tail call i64 @llvm.riscv.vsetvli.i64(i64 %47, i64 2, i64 3), !dbg !16
+  %49 = trunc nuw i64 %48 to i32, !dbg !16
+  %50 = getelementptr float, ptr %44, i64 %46, !dbg !16
+  %51 = call <vscale x 16 x float> @llvm.vp.load.nxv16f32.p0(ptr %50, <vscale x 16 x i1> splat (i1 true), i32 %49), !dbg !16
+  %52 = getelementptr float, ptr %43, i64 %46, !dbg !16
+  tail call void @llvm.vp.store.nxv16f32.p0(<vscale x 16 x float> %51, ptr %52, <vscale x 16 x i1> splat (i1 true), i32 %49), !dbg !16
+  %53 = add i64 %48, %46, !dbg !16
+  %.not2 = icmp ult i64 %53, %17, !dbg !16
+  br i1 %.not2, label %45, label %54, !dbg !16
 
-54:                                               ; preds = %44
+54:                                               ; preds = %45
   ret void, !dbg !17
 }
 
@@ -77,10 +80,14 @@ declare <vscale x 16 x float> @llvm.vp.load.nxv16f32.p0(ptr captures(none), <vsc
 ; Function Attrs: mustprogress nocallback nofree nosync nounwind willreturn memory(argmem: write)
 declare void @llvm.vp.store.nxv16f32.p0(<vscale x 16 x float>, ptr captures(none), <vscale x 16 x i1>, i32) #3
 
+; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
+declare i64 @llvm.smin.i64(i64, i64) #4
+
 attributes #0 = { nofree norecurse nosync nounwind memory(argmem: readwrite) }
 attributes #1 = { mustprogress nocallback nofree nosync nounwind willreturn memory(none) }
 attributes #2 = { mustprogress nocallback nofree nosync nounwind willreturn memory(argmem: read) }
 attributes #3 = { mustprogress nocallback nofree nosync nounwind willreturn memory(argmem: write) }
+attributes #4 = { nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none) }
 
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!2}

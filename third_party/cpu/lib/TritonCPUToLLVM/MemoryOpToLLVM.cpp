@@ -264,16 +264,26 @@ struct VectorMaskedLoadOpConversion : public OpConversionPattern<vector::MaskedL
     headerBlock->addArgument(i64Ty, loc);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::BrOp::create(rewriter, loc, ValueRange{zero}, headerBlock);
-
     rewriter.setInsertionPointToStart(headerBlock);
-    auto one28 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
-                    rewriter.getI64IntegerAttr(128));
+
+    int64_t vecSize = vecTy.getNumElements();
+    auto constVecSize = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(vecSize));
+    auto constVecSizeExt = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(vecSize));
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    Value nElements = funcOp.getArgument(3);
+    Value pidX = funcOp.getArgument(4);
+    Value blockStart = LLVM::MulOp::create(rewriter, loc, i32Ty, pidX, constVecSize);
+    auto blockStartExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, blockStart);
+    auto nElementsExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, nElements);
+    Value remaining = LLVM::SubOp::create(rewriter, loc, i64Ty, nElementsExt, blockStartExt);
+    auto cmpVecSize = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::slt, remaining, constVecSizeExt);
+    Value clampElements = LLVM::SelectOp::create(rewriter, loc, i64Ty, cmpVecSize, remaining, constVecSizeExt);
     auto two = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
                     rewriter.getI64IntegerAttr(2));
     auto three = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
                     rewriter.getI64IntegerAttr(3));
     Value iv = headerBlock->getArgument(0);
-    auto remain = LLVM::SubOp::create(rewriter, loc, i64Ty, one28, iv);
+    auto remain = LLVM::SubOp::create(rewriter, loc, i64Ty, clampElements, iv);
     auto vl = LLVM::CallIntrinsicOp::create(rewriter, loc, i64Ty,
                 rewriter.getStringAttr("llvm.riscv.vsetvli.i64"),
                 ArrayRef<Value>{remain, two, three}).getResult(0);
@@ -313,7 +323,7 @@ struct VectorMaskedLoadOpConversion : public OpConversionPattern<vector::MaskedL
 
     //auto vlZext = LLVM::ZExtOp::create(rewriter, loc, i64Ty, vl);
     auto iNext = LLVM::AddOp::create(rewriter, loc, i64Ty, iv, vl);
-    auto done = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::eq, iNext, one28);
+    auto done = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::uge, iNext, clampElements);
     LLVM::CondBrOp::create(rewriter, loc, done,
                                     continueBlock, ValueRange{},
                                     headerBlock, ValueRange{iNext});
@@ -351,7 +361,7 @@ struct VectorMaskedStoreOpConversion : public OpConversionPattern<vector::Masked
     auto one = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(1));
     Value alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, valTy, one, /*alignment=*/16);
     auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(0));
-    LLVM::StoreOp::create(rewriter, loc, valueToStore, alloca);
+    LLVM::StoreOp::create(rewriter, loc, valueToStore, alloca, /*alignment=*/16);
 
     Block *currentBlock = rewriter.getBlock();
     Block *continueBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
@@ -359,16 +369,26 @@ struct VectorMaskedStoreOpConversion : public OpConversionPattern<vector::Masked
     headerBlock->addArgument(i64Ty, loc);
     rewriter.setInsertionPointToEnd(currentBlock);
     LLVM::BrOp::create(rewriter, loc, ValueRange{zero}, headerBlock);
-
     rewriter.setInsertionPointToStart(headerBlock);
-    auto one28 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
-                    rewriter.getI64IntegerAttr(128));
+
+    int64_t vecSize = vecTy.getNumElements();
+    auto constVecSize = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(vecSize));
+    auto constVecSizeExt = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(vecSize));
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    Value nElements = funcOp.getArgument(3);
+    Value pidX = funcOp.getArgument(4);
+    Value blockStart = LLVM::MulOp::create(rewriter, loc, i32Ty, pidX, constVecSize);
+    auto blockStartExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, blockStart);
+    auto nElementsExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, nElements);
+    Value remaining = LLVM::SubOp::create(rewriter, loc, i64Ty, nElementsExt, blockStartExt);
+    auto cmpVecSize = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::slt, remaining, constVecSizeExt);
+    Value clampElements = LLVM::SelectOp::create(rewriter, loc, i64Ty, cmpVecSize, remaining, constVecSizeExt);
     auto two = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
                     rewriter.getI64IntegerAttr(2));
     auto three = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
                     rewriter.getI64IntegerAttr(3));
     Value iv = headerBlock->getArgument(0);
-    auto remain = LLVM::SubOp::create(rewriter, loc, i64Ty, one28, iv);
+    auto remain = LLVM::SubOp::create(rewriter, loc, i64Ty, clampElements, iv);
     auto vl = LLVM::CallIntrinsicOp::create(rewriter, loc, i64Ty,
                 rewriter.getStringAttr("llvm.riscv.vsetvli.i64"),
                 ValueRange({remain, two, three})).getResult(0);
@@ -409,7 +429,7 @@ struct VectorMaskedStoreOpConversion : public OpConversionPattern<vector::Masked
 
     //auto vlZext = LLVM::ZExtOp::create(rewriter, loc, i64Ty, vl);
     auto iNext = LLVM::AddOp::create(rewriter, loc, i64Ty, iv, vl);
-    auto done = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::eq, iNext, one28);
+    auto done = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::uge, iNext, clampElements);
     LLVM::CondBrOp::create(rewriter, loc, done,
                                     continueBlock, ValueRange{},
                                     headerBlock, ValueRange{iNext});
