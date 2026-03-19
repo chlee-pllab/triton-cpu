@@ -441,6 +441,264 @@ struct VectorMaskedStoreOpConversion : public OpConversionPattern<vector::Masked
   }
 };
 
+struct BranchMaskedLoadOpConversion : public OpConversionPattern<vector::MaskedLoadOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(vector::MaskedLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *typeConverter = getTypeConverter();
+    Type ptrTy = LLVM::LLVMPointerType::get(getContext());
+    Type resTy = getTypeConverter()->convertType(op.getType());
+    Value memref = adaptor.getBase();
+    Value ptr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, memref, ArrayRef<int64_t>{1});
+
+    auto vecTy = mlir::dyn_cast<VectorType>(resTy);
+    if (!vecTy) {
+      return failure();
+    }
+    auto i64Ty = IntegerType::get(getContext(), 64);
+    auto i32Ty = IntegerType::get(getContext(), 32);
+    auto i1Ty = IntegerType::get(getContext(), 1);
+    //auto one = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(1));
+    //Value alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, resTy, one, /*alignment=*/16);
+    //auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(0));
+
+    /*Block *currentBlock = rewriter.getBlock();
+    Block *continueBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *headerBlock = rewriter.createBlock(currentBlock->getParent(), continueBlock->getIterator());
+    headerBlock->addArgument(i64Ty, loc);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{zero}, headerBlock);
+    rewriter.setInsertionPointToStart(headerBlock);*/
+
+    int64_t vecSize = vecTy.getNumElements();
+    auto constVecSize = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(vecSize));
+    auto constVecSizeExt = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(vecSize));
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    Value nElements = funcOp.getArgument(3);
+    Value pidX = funcOp.getArgument(4);
+    Value blockStart = LLVM::MulOp::create(rewriter, loc, i32Ty, pidX, constVecSize);
+    auto blockStartExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, blockStart);
+    auto nElementsExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, nElements);
+    Value remaining = LLVM::SubOp::create(rewriter, loc, i64Ty, nElementsExt, blockStartExt);
+    auto cmpVecSize = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::ugt, remaining, constVecSizeExt);
+    //Value clampElements = LLVM::SelectOp::create(rewriter, loc, i64Ty, cmpVecSize, remaining, constVecSizeExt);
+
+    Block *currentBlock = rewriter.getBlock();
+    Block *continueBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    continueBlock->addArgument(resTy, loc);
+    Block *fullBlock = rewriter.createBlock(continueBlock->getParent(), continueBlock->getIterator());
+    Block *partialBlock = rewriter.createBlock(continueBlock->getParent(), continueBlock->getIterator());
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::CondBrOp::create(rewriter, loc, cmpVecSize, fullBlock, partialBlock);
+
+    rewriter.setInsertionPointToStart(fullBlock);
+    auto fullLoad = LLVM::LoadOp::create(rewriter, loc, resTy, ptr, /*alignment=*/16);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{fullLoad}, continueBlock);
+
+    rewriter.setInsertionPointToStart(partialBlock);
+    auto one = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(1));
+    Value alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, resTy, one, /*alignment=*/16);
+    auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(0));
+    Block *headerBlock = rewriter.createBlock(partialBlock->getParent(), continueBlock->getIterator());
+    headerBlock->addArgument(i64Ty, loc);
+    Block *partialEndBlock = rewriter.createBlock(continueBlock->getParent(), continueBlock->getIterator());
+    rewriter.setInsertionPointToEnd(partialBlock);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{zero}, headerBlock);
+    rewriter.setInsertionPointToStart(headerBlock);
+
+    auto two = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                    rewriter.getI64IntegerAttr(2));
+    auto three = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                    rewriter.getI64IntegerAttr(3));
+    Value iv = headerBlock->getArgument(0);
+    auto remain = LLVM::SubOp::create(rewriter, loc, i64Ty, remaining, iv);
+    auto vl = LLVM::CallIntrinsicOp::create(rewriter, loc, i64Ty,
+                rewriter.getStringAttr("llvm.riscv.vsetvli.i64"),
+                ArrayRef<Value>{remain, two, three}).getResult(0);
+    auto vlTrunc = LLVM::TruncOp::create(rewriter, loc, i32Ty, vl);
+
+    Type elemTy = vecTy.getElementType();
+    auto loadPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemTy, ptr,
+                    ArrayRef<LLVM::GEPArg>{iv});//,
+                    //LLVM::GEPNoWrapFlags::inbounds | LLVM::GEPNoWrapFlags::nuw);
+    VectorType nxv16f32Ty = VectorType::get({16}, rewriter.getF32Type(), /*scalable=*/true);
+    VectorType nxv16i1Ty = VectorType::get({16}, i1Ty, /*scalable=*/true);
+    auto splatAttr = SplatElementsAttr::get(nxv16i1Ty, rewriter.getBoolAttr(true));
+    auto allTrueMask = LLVM::ConstantOp::create(rewriter, loc, nxv16i1Ty, splatAttr);
+    auto emptyDict = rewriter.getDictionaryAttr({});
+    auto alignAttr = rewriter.getNamedAttr("llvm.align", rewriter.getI64IntegerAttr(4));
+    auto ptrAttrDict = DictionaryAttr::get(rewriter.getContext(), {alignAttr});
+    auto vpLoadOp = LLVM::CallIntrinsicOp::create(rewriter, loc, nxv16f32Ty,
+                    rewriter.getStringAttr("llvm.vp.load.nxv16f32.p0"),
+                    ArrayRef<Value>{loadPtr, allTrueMask, vlTrunc});
+    //vpLoadOp.setArgAttrsAttr(rewriter.getArrayAttr({ptrAttrDict, emptyDict, emptyDict}));
+    Value vpLoad = vpLoadOp.getResult(0);
+
+    Value destPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemTy, alloca,
+                    ArrayRef<LLVM::GEPArg>{iv});//,
+                    //LLVM::GEPNoWrapFlags::inbounds | LLVM::GEPNoWrapFlags::nuw);
+    auto vpStoreOp = LLVM::CallIntrinsicOp::create(rewriter, loc,
+                    rewriter.getStringAttr("llvm.vp.store.nxv16f32.p0"),
+                    ValueRange({vpLoad, destPtr, allTrueMask, vlTrunc}));
+    /*auto dict = adaptor.getBase().getDefiningOp()->getAttrs();
+    SmallVector<NamedAttribute, 1> refineAttr{alignAttr};
+    for (auto attr : dict) {
+        if (attr.getName().str() != "llvm.nonnull")
+            refineAttr.push_back(attr);
+    }
+    auto refineDict = DictionaryAttr::get(rewriter.getContext(), refineAttr);
+    vpStoreOp.setArgAttrsAttr(rewriter.getArrayAttr({emptyDict, refineDict, emptyDict, emptyDict}));*/
+
+    //auto vlZext = LLVM::ZExtOp::create(rewriter, loc, i64Ty, vl);
+    auto iNext = LLVM::AddOp::create(rewriter, loc, i64Ty, iv, vl);
+    auto done = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::uge, iNext, remaining);
+    LLVM::CondBrOp::create(rewriter, loc, done,
+                                    partialEndBlock, ValueRange{},
+                                    headerBlock, ValueRange{iNext});
+
+    rewriter.setInsertionPointToStart(partialEndBlock);
+    auto finalPartialLoad = LLVM::LoadOp::create(rewriter, loc, resTy, alloca, /*alignment=*/16);
+
+    LLVM::BrOp::create(rewriter, loc, ValueRange{finalPartialLoad}, continueBlock);
+    rewriter.setInsertionPointToStart(continueBlock);
+    Value finalResult = continueBlock->getArgument(0);
+
+    rewriter.replaceOp(op, finalResult);
+    return success();
+  }
+};
+
+struct BranchMaskedStoreOpConversion : public OpConversionPattern<vector::MaskedStoreOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(vector::MaskedStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *typeConverter = getTypeConverter();
+    Type ptrTy = LLVM::LLVMPointerType::get(getContext());
+    Type valTy = typeConverter->convertType(op.getValueToStore().getType());
+    Value memref = adaptor.getBase();
+    Value valueToStore = adaptor.getValueToStore();
+
+    Value ptr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, memref, ArrayRef<int64_t>{1});
+
+    auto vecTy = mlir::dyn_cast<VectorType>(valTy);
+    if (!vecTy) {
+      return failure();
+    }
+    auto i64Ty = IntegerType::get(getContext(), 64);
+    auto i32Ty = IntegerType::get(getContext(), 32);
+    auto i1Ty = IntegerType::get(getContext(), 1);
+    //auto one = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(1));
+    //Value alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, valTy, one, /*alignment=*/16);
+    //auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(0));
+    //LLVM::StoreOp::create(rewriter, loc, valueToStore, alloca, /*alignment=*/16);
+
+    /*Block *currentBlock = rewriter.getBlock();
+    Block *continueBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *headerBlock = rewriter.createBlock(currentBlock->getParent(), continueBlock->getIterator());
+    headerBlock->addArgument(i64Ty, loc);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{zero}, headerBlock);
+    rewriter.setInsertionPointToStart(headerBlock);*/
+
+    int64_t vecSize = vecTy.getNumElements();
+    auto constVecSize = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(vecSize));
+    auto constVecSizeExt = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(vecSize));
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    Value nElements = funcOp.getArgument(3);
+    Value pidX = funcOp.getArgument(4);
+    Value blockStart = LLVM::MulOp::create(rewriter, loc, i32Ty, pidX, constVecSize);
+    auto blockStartExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, blockStart);
+    auto nElementsExt = LLVM::SExtOp::create(rewriter, loc, i64Ty, nElements);
+    Value remaining = LLVM::SubOp::create(rewriter, loc, i64Ty, nElementsExt, blockStartExt);
+    auto cmpVecSize = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::ugt, remaining, constVecSizeExt);
+    //Value clampElements = LLVM::SelectOp::create(rewriter, loc, i64Ty, cmpVecSize, remaining, constVecSizeExt);
+
+    Block *currentBlock = rewriter.getBlock();
+    Block *continueBlock = rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *fullBlock = rewriter.createBlock(continueBlock->getParent(), continueBlock->getIterator());
+    Block *partialBlock = rewriter.createBlock(continueBlock->getParent(), continueBlock->getIterator());
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::CondBrOp::create(rewriter, loc, cmpVecSize, fullBlock, partialBlock);
+
+    rewriter.setInsertionPointToStart(fullBlock);
+    LLVM::StoreOp::create(rewriter, loc, valueToStore, ptr, /*alignment=*/16);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{}, continueBlock);
+
+    rewriter.setInsertionPointToStart(partialBlock);
+    auto one = LLVM::ConstantOp::create(rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(1));
+    Value alloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, valTy, one, /*alignment=*/16);
+    LLVM::StoreOp::create(rewriter, loc, valueToStore, alloca, /*alignment=*/16);
+    auto zero = LLVM::ConstantOp::create(rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(0));
+    Block *headerBlock = rewriter.createBlock(continueBlock->getParent(), continueBlock->getIterator());
+    headerBlock->addArgument(i64Ty, loc);
+    rewriter.setInsertionPointToEnd(partialBlock);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{zero}, headerBlock);
+    rewriter.setInsertionPointToStart(headerBlock);
+
+    auto two = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                    rewriter.getI64IntegerAttr(2));
+    auto three = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                    rewriter.getI64IntegerAttr(3));
+    Value iv = headerBlock->getArgument(0);
+    auto remain = LLVM::SubOp::create(rewriter, loc, i64Ty, remaining, iv);
+    auto vl = LLVM::CallIntrinsicOp::create(rewriter, loc, i64Ty,
+                rewriter.getStringAttr("llvm.riscv.vsetvli.i64"),
+                ValueRange({remain, two, three})).getResult(0);
+    auto vlTrunc = LLVM::TruncOp::create(rewriter, loc, i32Ty, vl);
+
+    Type elemTy = vecTy.getElementType();
+    auto loadPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemTy, alloca,
+                    ArrayRef<LLVM::GEPArg>{iv});//,
+                    //LLVM::GEPNoWrapFlags::inbounds | LLVM::GEPNoWrapFlags::nuw);
+    VectorType nxv16f32Ty = VectorType::get({16}, rewriter.getF32Type(), /*scalable=*/true);
+    VectorType nxv16i1Ty = VectorType::get({16}, i1Ty, /*scalable=*/true);
+    auto splatAttr = SplatElementsAttr::get(nxv16i1Ty, rewriter.getBoolAttr(true));
+    auto allTrueMask = LLVM::ConstantOp::create(rewriter, loc, nxv16i1Ty, splatAttr);
+    //auto allTrueMask = rewriter.create<LLVM::ConstantOp>(loc, nxv16i1Ty, rewriter.getZeroAttr(nxv16i1Ty));
+    auto emptyDict = rewriter.getDictionaryAttr({});
+    auto alignAttr = rewriter.getNamedAttr("llvm.align", rewriter.getI64IntegerAttr(4));
+    auto ptrAttrDict = DictionaryAttr::get(rewriter.getContext(), {alignAttr});
+    auto vpLoadOp = LLVM::CallIntrinsicOp::create(rewriter, loc, nxv16f32Ty,
+                    rewriter.getStringAttr("llvm.vp.load.nxv16f32.p0"),
+                    ValueRange({loadPtr, allTrueMask, vlTrunc}));
+    /*auto dict = adaptor.getBase().getDefiningOp()->getAttrs();
+    SmallVector<NamedAttribute, 1> refineAttr{alignAttr};
+    for (auto attr : dict) {
+        if (attr.getName().str() != "llvm.nonnull")
+            refineAttr.push_back(attr);
+    }
+    auto refineDict = DictionaryAttr::get(rewriter.getContext(), refineAttr);
+    vpLoadOp.setArgAttrsAttr(rewriter.getArrayAttr({refineDict, emptyDict, emptyDict}));*/
+    Value vpLoad = vpLoadOp.getResult(0);
+
+    auto destPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemTy, ptr,
+                    ArrayRef<LLVM::GEPArg>{iv});//,
+                    //LLVM::GEPNoWrapFlags::inbounds | LLVM::GEPNoWrapFlags::nuw);
+    auto vpStoreOp = LLVM::CallIntrinsicOp::create(rewriter, loc,
+                    rewriter.getStringAttr("llvm.vp.store.nxv16f32.p0"),
+                    ValueRange({vpLoad, destPtr, allTrueMask, vlTrunc}));
+    //vpStoreOp.setArgAttrsAttr(rewriter.getArrayAttr({emptyDict, ptrAttrDict, emptyDict, emptyDict}));
+
+    //auto vlZext = LLVM::ZExtOp::create(rewriter, loc, i64Ty, vl);
+    auto iNext = LLVM::AddOp::create(rewriter, loc, i64Ty, iv, vl);
+    auto done = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::uge, iNext, remaining);
+    LLVM::CondBrOp::create(rewriter, loc, done,
+                                    continueBlock, ValueRange{},
+                                    headerBlock, ValueRange{iNext});
+
+    rewriter.setInsertionPointToStart(continueBlock);
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+};
+
 
 struct PtrToIntOpConversion : public OpConversionPattern<triton::PtrToIntOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -544,7 +802,13 @@ struct MemoryOpToLLVM
     patterns.add<StoreOpConversion>(typeConverter, context);
 
     char* vsetvl_env = getenv("TRITON_VSETVL_MINE");
-    if (vsetvl_env) {
+    char* branch_env = getenv("TRITON_BRANCH_TAIL");
+    if (branch_env) {
+      llvm::outs()<<"!TRITON_BRANCH_TAIL is set\n";
+      patterns.add<BranchMaskedLoadOpConversion>(typeConverter, context);
+      patterns.add<BranchMaskedStoreOpConversion>(typeConverter, context);
+    }
+    else if (vsetvl_env) {
       llvm::outs()<<"!TRITON_VSETVL_MINE is set\n";
       patterns.add<VectorMaskedLoadOpConversion>(typeConverter, context);
       patterns.add<VectorMaskedStoreOpConversion>(typeConverter, context);
