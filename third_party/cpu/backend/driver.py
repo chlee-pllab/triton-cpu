@@ -41,16 +41,19 @@ if os.path.exists(sys_lib_dir):
 def compile_module_from_src(src, name):
     key = hashlib.md5(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    print(f"name.so: {name}.so")
     cache_path = cache.get_file(f"{name}.so")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
                 f.write(src)
+            print("\n" + "=" * 80)
+            print(f"compile_module_from_src: [0]: {name}, [1]: {src_path}, [2]: {tmpdir}")
             so = _build(name, src_path, tmpdir, library_dirs, include_dirs, libraries, ccflags)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+            print(f"compile_module_from_src: {cache_path}")
+            print("=" * 80 + "\n")
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)

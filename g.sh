@@ -7,6 +7,7 @@ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
   LLVM_SYSPATH=$LLVM_BUILD_DIR \
   pip install -vvv -e .
 
+export CC=$HOME/llvm-project_v/install/bin/clang
 source .venv/bin/activate
 TRITON_ALWAYS_COMPILE=1 \
   TRITON_KERNEL_DUMP=1 \

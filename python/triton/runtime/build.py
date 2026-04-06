@@ -48,9 +48,8 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     system = platform.system()
     machine = platform.machine()
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
-    #cc = os.environ.get("CC")
-    cc = os.path.expanduser("~/llvm-project_v/install/bin/clang")
-    print("cc: ", cc)
+    cc = os.environ.get("CC")
+    #print("cc: ", cc)
     if cc is None:
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
@@ -70,9 +69,11 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     #cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
     sysroot = os.path.expanduser("~/toolchain/sysroot")
     toolchain = os.path.expanduser("~/toolchain")
-    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-fuse-ld=lld", "-o", so]
+    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-o", so]
+    if src.endswith(".s"):
+        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-fuse-ld=lld", "-o", so]
 
-    #libraries += ["gcc"]
+    libraries += ["gcc"]
     # Use dynamic lookup to load Python library on Mac
     if system == "Darwin":
         cc_cmd += ["-undefined", "dynamic_lookup"]
@@ -100,7 +101,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
                 else:
                     print("Warning: TRITON_LOCAL_LIBOMP_PATH is not set for Apple clang. OpenMP is disabled.")
             else:
-                #cc_cmd += ["-fopenmp"]
+                cc_cmd += ["-fopenmp"]
                 if libomp_path:
                     print("Info: Ignoring TRITON_LOCAL_LIBOMP_PATH for non-Apple clang compiler")
     if src.endswith(".s"):
@@ -110,7 +111,11 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
             # On Arm backend, some CPU (neoverse-v2) needs to be specified through -mcpu
             cc_cmd += ["-mcpu=native"]
     cc_cmd.extend(ccflags)
-    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+    #subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+    print(f"Compiling {name}.so")
+    print("Command:")
+    print(' '.join(str(arg) for arg in cc_cmd))
+    subprocess.check_call(cc_cmd)
     return so
 
 
