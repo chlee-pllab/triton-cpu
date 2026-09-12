@@ -173,11 +173,14 @@ def generate_runner(kernel_name: str, signature: dict, arguments: dict, grid: Se
         call_prefix += ", "
     gx, gy, gz = grid
 
-    call = f"          {kernel_name}({call_prefix}x, y, z, {gx}, {gy}, {gz});"
+    call = f"            {kernel_name}({call_prefix}x, y, z, {gx}, {gy}, {gz});"
     loop_open = [
-        f"    for (int x = 0; x < {gx}; ++x)",
-        f"      for (int y = 0; y < {gy}; ++y)",
-        f"        for (int z = 0; z < {gz}; ++z)",
+        "#ifdef _OPENMP",
+        "#pragma omp for collapse(3) schedule(static)",
+        "#endif",
+        f"      for (int x = 0; x < {gx}; ++x)",
+        f"        for (int y = 0; y < {gy}; ++y)",
+        f"          for (int z = 0; z < {gz}; ++z)",
     ]
 
     lines = [
@@ -185,6 +188,9 @@ def generate_runner(kernel_name: str, signature: dict, arguments: dict, grid: Se
         "#include <stdio.h>",
         "#include <stdlib.h>",
         "#include <time.h>",
+        "#ifdef _OPENMP",
+        "#include <omp.h>",
+        "#endif",
         "",
         f"extern void {kernel_name}({', '.join(extern_types)});",
         "",
@@ -198,15 +204,25 @@ def generate_runner(kernel_name: str, signature: dict, arguments: dict, grid: Se
         "  if (bench_iters < 0) bench_iters = 0;",
         "  if (bench_warmup < 0) bench_warmup = 0;",
         "",
-        "  for (long bench_it = 0; bench_it < bench_warmup; ++bench_it) {",
+        "#ifdef _OPENMP",
+        "  #pragma omp parallel",
+        "#endif",
+        "  {",
+        "    for (long bench_it = 0; bench_it < bench_warmup; ++bench_it) {",
         *loop_open,
         call,
+        "    }",
         "  }",
         "  struct timespec bench_t0, bench_t1;",
         "  clock_gettime(CLOCK_MONOTONIC, &bench_t0);",
-        "  for (long bench_it = 0; bench_it < (bench_iters > 0 ? bench_iters : 1); ++bench_it) {",
+        "#ifdef _OPENMP",
+        "  #pragma omp parallel",
+        "#endif",
+        "  {",
+        "    for (long bench_it = 0; bench_it < (bench_iters > 0 ? bench_iters : 1); ++bench_it) {",
         *loop_open,
         call,
+        "    }",
         "  }",
         "  clock_gettime(CLOCK_MONOTONIC, &bench_t1);",
         "  if (bench_iters > 0) {",
@@ -235,10 +251,14 @@ def build_standalone_executable(kernel_name: str, so_bytes: bytes, runner_source
     so_path.write_bytes(so_bytes)
     runner_path.write_text(runner_source)
 
+    extra_args = ["-fopenmp"]
+    if toolchain.sysroot and os.path.isfile(os.path.join(toolchain.sysroot, "usr", "lib", "libomp.a")):
+        extra_args += ["-Wl,-Bstatic", "-lomp", "-Wl,-Bdynamic"]
+    extra_args.append("-Wl,-rpath,$ORIGIN")
     cmd = toolchain.compile_command(
         [runner_path.name, so_path.name],
         output.name,
-        extra_args=["-Wl,-rpath,$ORIGIN"],
+        extra_args=extra_args,
     )
     subprocess.run(cmd, check=True, cwd=output.parent)
     return output, so_path

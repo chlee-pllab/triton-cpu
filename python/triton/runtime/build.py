@@ -73,7 +73,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     if src.endswith(".s"):
         cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-fuse-ld=lld", "-o", so]
 
-    libraries += ["gcc"]
+    libraries = libraries + ["gcc"]
     # Use dynamic lookup to load Python library on Mac
     if system == "Darwin":
         cc_cmd += ["-undefined", "dynamic_lookup"]
