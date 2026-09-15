@@ -66,14 +66,33 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     custom_backend_dirs = knobs.build.backend_dirs
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
-    #cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
-    sysroot = os.path.expanduser("~/toolchain/sysroot")
-    toolchain = os.path.expanduser("~/toolchain")
-    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-o", so]
-    if src.endswith(".s"):
-        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-fuse-ld=lld", "-o", so]
+    # TRITON_CPU_TARGET selects the compile target for CPU-Triton kernels/launchers:
+    #   "riscv64" (default): cross-compile for the RVV board, unchanged from before this switch existed.
+    #   "native": compile for the host running this process (e.g. so AOTI's compile-time
+    #             autotune step, or a local eager run, can actually load and execute the .so).
+    cpu_target = os.environ.get("TRITON_CPU_TARGET", "riscv64")
+    if cpu_target == "native":
+        # This project's clang/LLVM build has its own default target triple baked in
+        # (riscv64-unknown-linux-gnu), so it must be overridden explicitly here or
+        # clang will try to assemble genuinely-native (e.g. x86_64) asm as riscv64.
+        native_triple = os.environ.get("TRITON_CPU_NATIVE_TARGET", f"{machine}-linux-gnu")
+        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", f"--target={native_triple}", "-o", so]
+    else:
+        sysroot = os.path.expanduser("~/toolchain/sysroot")
+        toolchain = os.path.expanduser("~/toolchain")
+        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-o", so]
+        if src.endswith(".s"):
+            cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-march=rv64gcv", "-mabi=lp64d", f"--sysroot={sysroot}", f"--gcc-toolchain={toolchain}", "-fuse-ld=lld", "-o", so]
 
     libraries = libraries + ["gcc"]
+    if cpu_target != "native":
+        # This toolchain's libgcc.a has no software float<->bf16 conversion routines
+        # (__truncsfbf2 et al) and no RVV bf16 hardware extension is targeted either;
+        # link the real ones from a standalone riscv64 compiler-rt build (see
+        # ~/llvm-project_v/build-compiler-rt-riscv64, built the same way as
+        # ~/llvm-project_v/build-openmp-riscv64), placed alongside libgcc.a so it's
+        # already on this toolchain's default library search path.
+        libraries = libraries + ["clang_rt.builtins-riscv64"]
     # Use dynamic lookup to load Python library on Mac
     if system == "Darwin":
         cc_cmd += ["-undefined", "dynamic_lookup"]
@@ -103,7 +122,8 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
             else:
                 cc_cmd += ["-fopenmp"]
                 if libomp_path:
-                    print("Info: Ignoring TRITON_LOCAL_LIBOMP_PATH for non-Apple clang compiler")
+                    cc_cmd += [f"-I{libomp_path}/include", f"-L{libomp_path}/lib", "-lomp"]
+                    cc_cmd += ["-Wl,-rpath", f"{libomp_path}/lib"]
     if src.endswith(".s"):
         # This is required to properly parse .file directives
         cc_cmd += ["-g"]

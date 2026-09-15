@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import shutil
 import subprocess
@@ -77,11 +78,22 @@ def _infer_triton_type(value) -> str:
     raise ValueError(f"Cannot infer a Triton type for {type(value).__name__}; pass signature=... explicitly")
 
 
+_FLOAT_C_TYPES = ("float", "double", "_Float16", "__bf16")
+
+
 def _c_literal(value, c_type: str) -> str:
-    if c_type in ("float", "double"):
+    if c_type in _FLOAT_C_TYPES:
         value = float(value)
+        # repr() of a non-finite value ("nan"/"inf") is not a valid C literal on its
+        # own ("nan" + "f" suffix -> the bare identifier "nanf", not a float literal);
+        # uninitialized output buffers can legitimately contain such bit patterns.
+        if math.isnan(value):
+            return "NAN"
+        if math.isinf(value):
+            return "INFINITY" if value > 0 else "-INFINITY"
         literal = repr(value)
-        if c_type == "float":
+        if c_type != "double":
+            # A plain float literal narrows to _Float16/__bf16 in the initializer.
             literal += "f"
         return literal
     return str(int(value))
@@ -136,7 +148,20 @@ def generate_runner(kernel_name: str, signature: dict, arguments: dict, grid: Se
 
         if ty[0] == "*":
             values = list(arguments[name])
-            elem_type = ty_to_cpp(ty[1:])
+            elem_ty = ty[1:]
+            # ty_to_cpp maps bf16/fp16 to "float" (4 bytes) for scalar/ABI purposes, but
+            # the buffer the kernel actually indexes into is genuine 2-byte storage;
+            # declaring it as a 4-byte array here would corrupt stride/pointer arithmetic.
+            # Use clang's native half-precision types instead of bit-pattern plumbing
+            # (reference: ~/triton-riscv-workspace/triton-riscv commit 3c28abf "add f16")
+            # -- a plain decimal float literal narrows to _Float16/__bf16 in the array
+            # initializer, so callers can keep passing ordinary float values.
+            if elem_ty == "fp16":
+                elem_type = "_Float16"
+            elif elem_ty == "bf16":
+                elem_type = "__bf16"
+            else:
+                elem_type = ty_to_cpp(elem_ty)
             storage_size = max(1, len(values))
             initializer = ", ".join(_c_literal(v, elem_type) for v in values) or "0"
             declarations.append(f"  {elem_type} arg_{index}[{storage_size}] = {{{initializer}}};")
@@ -149,15 +174,19 @@ def generate_runner(kernel_name: str, signature: dict, arguments: dict, grid: Se
                     raise ValueError(f"Expected length for {name} does not match its buffer")
                 expected_init = ", ".join(_c_literal(v, elem_type) for v in expected_values) or "0"
                 declarations.append(f"  const {elem_type} expected_{index}[{storage_size}] = {{{expected_init}}};")
-                if elem_type in ("float", "double"):
+                if elem_type in _FLOAT_C_TYPES:
                     condition = (f"double diff = (double)arg_{index}[i] - (double)expected_{index}[i]; "
                                  f"if (diff < 0) diff = -diff; if (diff > {atol:.17g})")
+                    fail_fmt = (f'      fprintf(stderr, "verification failed: {name}[%d] got=%.9g '
+                                f'expected=%.9g\\n", i, (double)arg_{index}[i], (double)expected_{index}[i]);')
                 else:
                     condition = f"if (arg_{index}[i] != expected_{index}[i])"
+                    fail_fmt = (f'      fprintf(stderr, "verification failed: {name}[%d] got=%lld '
+                                f'expected=%lld\\n", i, (long long)arg_{index}[i], (long long)expected_{index}[i]);')
                 checks.extend([
                     f"  for (int i = 0; i < {len(values)}; ++i) {{",
                     f"    {condition} {{",
-                    f'      fprintf(stderr, "verification failed: {name}[%d]\\n", i);',
+                    fail_fmt,
                     "      return 1;",
                     "    }",
                     "  }",
@@ -184,6 +213,7 @@ def generate_runner(kernel_name: str, signature: dict, arguments: dict, grid: Se
     ]
 
     lines = [
+        "#include <math.h>",
         "#include <stdint.h>",
         "#include <stdio.h>",
         "#include <stdlib.h>",

@@ -321,8 +321,13 @@ class CPUBackend(BaseBackend):
             asm_path = os.path.join(tmpdir, "kernel.s")
             Path(asm_path).write_text(src)
             lib_dirs = cpu_driver.library_dirs
-            #libs = ["m", "TritonCPURuntime", "sleef"]
             libs = ["m"]
+            if os.environ.get("TRITON_CPU_TARGET") == "native":
+                # TritonCPURuntime/sleef here are built by this project's main CMake
+                # build for the host (x86_64) only -- no riscv64 build of them exists,
+                # so only link them in native mode; the default riscv64 cross-compile
+                # path is unaffected (stays exactly libs = ["m"], as before).
+                libs = ["m", "TritonCPURuntime", "sleef"]
             print("lib_dirs: ", lib_dirs)
             print("cpu_driver.include_dirs: ", cpu_driver.include_dirs)
             ccflags = []

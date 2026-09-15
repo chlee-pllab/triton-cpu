@@ -143,6 +143,17 @@ std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features,
                     bool enable_fast_math = false) {
+  // TRITON_CPU_TARGET=native builds/runs a CPU-Triton kernel for the host
+  // machine (e.g. AOTInductor's compile-time autotune step, or a local
+  // eager run) instead of this backend's default riscv64gcv cross-compile
+  // target. This LLVM build's compiled-in default target triple is
+  // riscv64-unknown-linux-gnu, so getProcessTriple() (the true host triple)
+  // must be forced explicitly rather than relying on the module's triple.
+  const char *cpuTargetEnv = std::getenv("TRITON_CPU_TARGET");
+  bool nativeTarget = cpuTargetEnv && std::string(cpuTargetEnv) == "native";
+  if (nativeTarget) {
+    module->setTargetTriple(Triple(llvm::sys::getProcessTriple()));
+  }
   std::string error;
   auto target =
       llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
@@ -190,8 +201,18 @@ createTargetMachine(llvm::Module *module, std::string proc,
     CodegenArgv.push_back(Arg.c_str());
   llvm::cl::ParseCommandLineOptions(CodegenArgv.size(), CodegenArgv.data());
   outs()<<"echo createTargetMachine\n";
-  StringRef Proc("generic-rv64");
-  const std::string Features = "+m,+f,+d,+v";
+  std::string Proc = "generic-rv64";
+  std::string Features = "+m,+f,+d,+v";
+  if (nativeTarget) {
+    Proc = llvm::sys::getHostCPUName().str();
+    Features.clear();
+    for (auto &kv : llvm::sys::getHostCPUFeatures()) {
+      if (!Features.empty())
+        Features += ",";
+      Features += (kv.second ? "+" : "-");
+      Features += kv.first().str();
+    }
+  }
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module->getTargetTriple(), Proc, Features, opt, llvm::Reloc::PIC_,
       std::nullopt,
@@ -456,8 +477,6 @@ std::string translateLLVMIRToASM(
         outs() << "Emission of this file type is not supported!\n";
         return "";
     }
-    llvm::DebugFlag = true;
-    llvm::setCurrentDebugType("codegen");
     pass.run(module);
 
     if (enabledTiming) {
