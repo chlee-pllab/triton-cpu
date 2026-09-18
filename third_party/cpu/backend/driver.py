@@ -39,9 +39,19 @@ if os.path.exists(sys_lib_dir):
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.md5(src.encode("utf-8")).hexdigest()
+    # The launcher's C++ glue source text is identical regardless of target
+    # architecture, so hashing src alone lets a cache dir shared across
+    # different TRITON_CPU_TARGET runs (e.g. "native"/x86_64 vs the default
+    # riscv64) return a cached .so built for the WRONG architecture -- dlopen()
+    # on a mismatched-arch ELF fails with the same generic "cannot open shared
+    # object file" error as a genuinely missing file. Mix the target into the
+    # key so each architecture gets its own cache entry.
+    target_tag = os.environ.get("TRITON_CPU_TARGET", "riscv64")
+    key = hashlib.md5(f"{target_tag}\n{src}".encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     cache_path = cache.get_file(f"{name}.so")
+    if cache_path is not None and not os.path.exists(cache_path):
+        cache_path = None
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")

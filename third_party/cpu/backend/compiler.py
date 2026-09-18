@@ -313,20 +313,12 @@ class CPUBackend(BaseBackend):
 
     @staticmethod
     def make_so(src, metadata, options):
-        from triton.runtime.cache import get_cache_manager
-        key = hashlib.md5(src.encode("utf-8")).hexdigest()
-        cache = get_cache_manager(key)
-        cache_path = cache.get_file(f"kernel.so")
         with tempfile.TemporaryDirectory() as tmpdir:
             asm_path = os.path.join(tmpdir, "kernel.s")
             Path(asm_path).write_text(src)
             lib_dirs = cpu_driver.library_dirs
             libs = ["m"]
             if os.environ.get("TRITON_CPU_TARGET") == "native":
-                # TritonCPURuntime/sleef here are built by this project's main CMake
-                # build for the host (x86_64) only -- no riscv64 build of them exists,
-                # so only link them in native mode; the default riscv64 cross-compile
-                # path is unaffected (stays exactly libs = ["m"], as before).
                 libs = ["m", "TritonCPURuntime", "sleef"]
             print("lib_dirs: ", lib_dirs)
             print("cpu_driver.include_dirs: ", cpu_driver.include_dirs)
@@ -335,12 +327,8 @@ class CPUBackend(BaseBackend):
             print(f"make_so: [0]: kernel, [1]: {asm_path} [2]: {tmpdir}")
             so = _build("kernel", asm_path, tmpdir, lib_dirs, cpu_driver.include_dirs, libs, ccflags)
             with open(so, "rb") as f:
-                #return f.read()
-                kernel_binary = f.read()
-                cache_path = cache.put(kernel_binary, f"kernel.so", binary=True)
-                print(f"make_so: {cache_path}")
                 print("=" * 80)
-                return kernel_binary
+                return f.read()
 
     def add_stages(self, stages, options, language):
         assert language == Language.TRITON
